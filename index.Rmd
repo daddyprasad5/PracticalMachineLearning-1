@@ -1,30 +1,153 @@
----
-title: "Practical Machine Learning Course Project"
-author: "Rodney Gurdal"
-date: "July 19, 2016"
-output: html_document
----
+
+*Practical Machine Learning Course Project*  
+*Rodney Gurdal*  
+*July 24, 2016*  
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-## R Markdown
+Introduction
 
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
 
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+Data
 
-```{r cars}
-summary(cars)
+The training data for this project are available here:
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+The test data are available here:
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+Load libraries:
+```{r, warning=FALSE}
+library(caret)
+library(rpart)
+library(rattle)
+library(e1071)
+library(randomForest)
+
 ```
 
-## Including Plots
 
-You can also embed plots, for example:
+### Get the data, prepare the data  
 
-```{r pressure, echo=FALSE}
-plot(pressure)
+The "testingdata"" set is set aside. Model exploration and analysis are only performed on the "trainingdata"" set.
+
+```{r}
+filename1 <- "pml-training.csv"
+fileURL1 <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"   
+if (!file.exists(filename1)){
+  download.file(fileURL1, filename1, method="libcurl")
+}  
+if (!file.exists("trainingdata")) { 
+  trainingdata <- read.csv("pml-training.csv") 
+}
+
+
+filename2 <- "pml-testing.csv"
+fileURL2 <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"   
+if (!file.exists(filename2)){
+  download.file(fileURL2, filename2, method="libcurl")
+}  
+if (!file.exists("testingdata")) { 
+  testingdata <- read.csv("pml-testing.csv") 
+}
+
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+
+### Cross-Validation
+Because we want to be able to estimate the out-of-sample error, we randomly split the full training data (trainingdata) 
+into a smaller training set (trainingdata1) and a validation set (trainingdata2):
+```{r}
+set.seed(123)
+inTrain <- createDataPartition(y=trainingdata$classe, p=0.7, list=F)
+trainingdata1 <- trainingdata[inTrain, ]
+trainingdata2 <- trainingdata[-inTrain, ]  
+```
+
+
+The original dataset includes 19622 observations of 160 variables. Many of those variables, however, are not needed. 
+We now reduce the dataset by removing variables with nearly zero variance, variables
+that are almost always NA, and variables that don’t make sense for prediction. After these variables 
+are removed from "trainingdata1", we remove the same ones from "trainingdata2".
+
+```{r}
+# remove variables with nearly zero variance
+nzv <- nearZeroVar(trainingdata1)
+trainingdata1 <- trainingdata1[, -nzv]
+trainingdata2 <- trainingdata2[, -nzv]
+
+# remove variables that are almost always NA
+mostlyNA <- sapply(trainingdata1, function(x) mean(is.na(x))) > 0.95
+trainingdata1 <- trainingdata1[, mostlyNA==F]
+trainingdata2 <- trainingdata2[, mostlyNA==F]
+
+# remove variables that don't make  sense for prediction (user_name, etc.).
+trainingdata1 <- trainingdata1[, -(1:5)]
+trainingdata2 <- trainingdata2[, -(1:5)]
+```
+
+
+
+###Model
+
+
+We start with a Random Forest model. We  fit the model on trainingdata1, and instruct the “train” function 
+to use 3-fold cross-validation to select optimal tuning parameters for the model.
+
+```{r}
+fitControl <- trainControl(method="cv", number=3)
+RFfit <- train(classe ~ ., data=trainingdata1, method="rf", metric="Kappa", trControl=fitControl)
+RFfit$finalModel
+```
+
+
+We'll also try a Gradient Boosting (gbm) model for comparison.
+```{r}
+GBMfit <- train(classe~., data=trainingdata1, method="gbm", metric="Kappa", trControl=fitControl,verbose=FALSE)
+GBMfit$finalModel
+```
+
+
+The models are then compared using the resamples function from the Caret package.
+```{r}
+rValues <- resamples(list(rf=RFfit,gbm=GBMfit))
+summary(rValues)
+```
+
+
+
+###Plot the results
+```{r}
+bwplot(rValues,metric="Kappa",main="RandomForest (rf) vs Gradient Boosting (gbm)")
+```
+
+
+We see from the plot that the Random Forest model works better, with a mean accuracy of .996, compared to .9851 for the gbm model. 
+We therefore choose the Random Forest model.
+
+###Cross Validation
+```{r}
+#Training set:
+trainingPred <- predict(RFfit, trainingdata1)
+confusionMatrix(trainingPred, trainingdata1$classe)
+
+#Validation set:
+cvPred <- predict(RFfit, trainingdata2)
+confusionMatrix(cvPred, trainingdata2$classe)
+```
+
+
+###Model Testing
+```{r}
+results <- predict(RFfit,newdata=testingdata)
+print(as.data.frame(results))
+```
+
+
+
